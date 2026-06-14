@@ -1,8 +1,9 @@
 # Hướng Dẫn Từng Bước (Step-by-Step Guide) cho Bài Tập CDO Monitoring
 
-Tài liệu này hướng dẫn chi tiết các bước để thực hiện và hoàn thành 2 bài tập giám sát hệ thống trên AWS:
+Tài liệu này hướng dẫn chi tiết các bước để thực hiện và hoàn thành các bài tập giám sát hệ thống và bảo mật trên AWS:
 1. **Bài tập 1 (Session 02):** Cài đặt và cấu hình CloudWatch Agent trên EC2.
 2. **Bài tập 2 (Session 03):** Cấu hình CloudWatch Alarm gửi cảnh báo Email qua SNS khi CPU Utilization vượt quá 80% trong 5 phút.
+3. **Bài tập 3 (Session 05):** Cấu hình cảnh báo khi tài khoản Root đăng nhập AWS (Alert on AWS Root Account Login).
 
 ---
 
@@ -162,3 +163,67 @@ Bài tập này thiết lập cơ chế tự động gửi thông báo qua Email
    stress --cpu $(nproc) --timeout 360
    ```
 3. Theo dõi biểu đồ trên CloudWatch Alarm. Khi trạng thái chuyển sang màu đỏ (**In Alarm**), bạn sẽ nhận được Email cảnh báo từ AWS SNS gửi về hòm thư đã đăng ký.
+
+---
+
+## BÀI TẬP 3: Cấu hình cảnh báo đăng nhập Root Account (Session 05)
+
+Bài tập này thiết lập cơ chế tự động gửi cảnh báo qua Email/SMS ngay lập tức khi phát hiện có hoạt động đăng nhập bằng tài khoản Root (Root Account) trên tài khoản AWS của bạn.
+
+### Bước 1: Bật CloudTrail và gửi Log về CloudWatch Logs
+
+1. Truy cập **CloudTrail Console** -> Ở menu bên trái chọn **Trails** -> Chọn **Create trail**.
+2. Thiết lập cấu hình Trail:
+   - **Trail name:** Nhập tên bất kỳ (ví dụ: `AWS-Root-Login-Trail`).
+   - **Storage location:** Có thể tạo S3 bucket mới hoặc chọn S3 bucket đã có để lưu trữ file log.
+   - **CloudWatch Logs:** Tích chọn **Enabled** để kích hoạt tính năng đẩy log từ CloudTrail về CloudWatch.
+   - **Log group:** Chọn đặt tên cho Log group (mặc định là `aws-cloudtrail-logs-...`).
+   - **IAM Role:** Chọn **New** để AWS tự động tạo Role có đủ quyền ghi log vào CloudWatch Logs (hoặc chọn Role sẵn có nếu bạn đã cấu hình trước).
+3. Nhấp **Next**. Giữ các tùy chọn mặc định cho phần Event type (chỉ cần lấy Management events) và bấm **Next** -> **Create trail**.
+
+### Bước 2: Tạo CloudWatch Metric Filter từ CloudTrail Logs
+
+1. Truy cập **CloudWatch Console** -> Chọn **Log groups** ở menu bên trái.
+2. Tìm và nhấp vào Log group của CloudTrail vừa tạo (ví dụ: `aws-cloudtrail-logs-...`).
+3. Chọn tab **Metric filters** -> Nhấn nút **Create metric filter**.
+4. Thiết lập cấu hình bộ lọc:
+   - **Filter pattern:** Sao chép và dán mẫu pattern sau để lọc sự kiện đăng nhập của tài khoản Root:
+     ```json
+     { $.userIdentity.type = "Root" && $.eventType != "AwsServiceEvent" }
+     ```
+   - Nhấn **Next**.
+   - **Filter name:** Đặt tên cho bộ lọc (ví dụ: `RootAccountLoginFilter`).
+   - **Metric namespace:** Nhập tên namespace (ví dụ: `Security`).
+   - **Metric name:** Nhập tên Metric (ví dụ: `RootAccountLoginCount`).
+   - **Metric value:** Nhập giá trị là `1`.
+5. Nhấp **Next**, kiểm tra lại cấu hình và nhấn **Save**.
+
+### Bước 3: Tạo CloudWatch Alarm
+
+1. Từ danh sách bộ lọc vừa tạo trong tab **Metric filters**, chọn bộ lọc của bạn và bấm **Create alarm**.
+2. Cấu hình Metric:
+   - **Metric name:** `RootAccountLoginCount`.
+   - **Namespace:** `Security`.
+   - **Statistic:** Chọn `Sum`.
+   - **Period:** Chọn `5 minutes` (hoặc `1 minute` để cảnh báo gửi đi nhanh hơn).
+3. Cấu hình Điều kiện (Conditions):
+   - **Threshold type:** Static.
+   - **Whenever RootAccountLoginCount is...** Chọn **Greater/Equal (>=)** và nhập giá trị `1`.
+   - Nhấn **Next**.
+
+### Bước 4: Thiết lập thông báo qua SNS (Notification Action)
+
+1. **Alarm state trigger:** Chọn **In alarm**.
+2. **Send a notification to the following SNS topic:**
+   - Chọn **Select an existing SNS topic** và chọn Topic thông báo của bạn (ví dụ: `EC2-Alerts-Topic` hoặc tạo Topic bảo mật riêng `AWS-Security-Alerts-Topic`).
+3. Nhấn **Next**.
+4. Đặt tên cho Alarm (ví dụ: `AWS-Root-Account-Login-Alarm`) và mô tả chi tiết.
+5. Nhấn **Next**, kiểm tra và bấm **Create alarm**.
+
+### Bước 5: Kiểm tra hoạt động cảnh báo
+
+1. Đăng xuất khỏi tài khoản AWS hiện tại.
+2. Tiến hành đăng nhập lại vào Console bằng tài khoản **Root Account** (tài khoản chính đăng ký bằng địa chỉ email).
+3. Sau khi đăng nhập thành công, chờ vài phút để CloudTrail ghi nhận log và đẩy về CloudWatch.
+4. Khi metric `RootAccountLoginCount` đạt giá trị >= 1, Alarm sẽ chuyển sang trạng thái **In Alarm** và kích hoạt gửi email cảnh báo về hòm thư của bạn qua SNS.
+
